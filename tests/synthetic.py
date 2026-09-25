@@ -6,6 +6,8 @@
 - :class:`FakeDownloader` stands in for yfinance: it serves frames in yfinance's
   raw response shape and records every call, so tests can tell cache hits from
   misses.
+- :func:`replace_after` rewrites the future: every bar after a cutoff becomes a
+  fresh random walk. It is the perturbation behind the lookahead tests.
 
 Fixtures built from these helpers live in ``conftest.py``.
 """
@@ -18,7 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from backtester.data import Rule
+from backtester.data import MarketData, Rule
 
 SYMBOLS: tuple[str, ...] = ("AAA", "BBB", "CCC")
 
@@ -59,6 +61,35 @@ def corrupt(frame: pd.DataFrame, row: int = BAD_ROW, **values: float) -> pd.Data
     for column, value in values.items():
         out.iloc[row, out.columns.get_loc(column)] = value
     return out
+
+
+def replace_after(data: MarketData, cutoff: pd.Timestamp | str, seed: int) -> MarketData:
+    """A copy of ``data`` in which every bar dated after ``cutoff`` is replaced.
+
+    Each symbol's post-cutoff bars become a fresh seeded random walk: valid OHLC,
+    starting 50% above the last pre-cutoff close with triple the volatility, so it
+    is unmistakably different from the original. Dates are kept, so the calendar
+    is unchanged; only what happened on those dates changes. Bars at or before
+    ``cutoff`` are untouched.
+
+    Rebuilt with ``type(data).from_frames`` (MarketData is immutable), so a
+    subclass such as the leaky negative control survives the round trip.
+    """
+    cutoff = pd.Timestamp(cutoff)
+    frames: dict[str, pd.DataFrame] = {}
+    for i, symbol in enumerate(data.symbols):
+        frame = data.frame(symbol)
+        after = frame.index > cutoff
+        n_after = int(after.sum())
+        if n_after:
+            anchor = frame["close"].iloc[0] if after.all() else frame.loc[~after, "close"].iloc[-1]
+            future = make_ohlcv(
+                n_days=n_after, seed=seed * 1_000 + i, start_price=anchor * 1.5, daily_vol=0.036
+            )
+            future.index = frame.index[after]
+            frame = pd.concat([frame.loc[~after], future])
+        frames[symbol] = frame
+    return type(data).from_frames(frames)
 
 
 def to_yfinance_format(

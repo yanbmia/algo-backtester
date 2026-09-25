@@ -13,6 +13,7 @@ from backtester.data.market_data import (
     Rule,
     Violation,
 )
+from backtester.data.view import MarketView
 
 __all__ = [
     "Bar",
@@ -21,6 +22,7 @@ __all__ = [
     "DataLoader",
     "DataValidationError",
     "MarketData",
+    "MarketView",
     "Rule",
     "Violation",
     "YFinanceLoader",

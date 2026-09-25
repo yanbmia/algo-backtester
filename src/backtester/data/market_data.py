@@ -1,9 +1,9 @@
 """Validated container for daily OHLCV market data.
 
 ``MarketData`` holds the complete (date, symbol) panel. Only the backtest engine
-should ever hold one: strategies will receive a truncated, point-in-time view
-instead (``MarketView``, built in the next phase), which is what makes lookahead
-structurally hard.
+should ever hold one: strategies receive a truncated, point-in-time
+:class:`~backtester.data.view.MarketView` from :meth:`MarketData.view`, which is
+what makes lookahead structurally hard.
 
 The only supported constructor is :meth:`MarketData.from_frames`. It validates
 every input frame and raises :class:`DataValidationError` listing *every* broken
@@ -18,10 +18,14 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from functools import reduce
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 from pandas.api.types import is_bool_dtype, is_numeric_dtype
+
+if TYPE_CHECKING:
+    from backtester.data.view import MarketView
 
 OHLCV_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close", "volume")
 PRICE_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close")
@@ -345,6 +349,7 @@ class MarketData:
     - ``calendar``: the sorted union of every symbol's trading dates.
     - ``symbols``: symbols in the order they were supplied.
     - ``bar(t)``: the engine's per-date accessor.
+    - ``view(t)``: the point-in-time view handed to strategies.
 
     With multiple symbols, calendars may differ (e.g. different listing dates);
     ``bar(t)`` then returns only the symbols that traded on ``t``.
@@ -435,11 +440,41 @@ class MarketData:
             o, h, lo, c, v = self._values[symbol][i]
             bars[symbol] = Bar(float(o), float(h), float(lo), float(c), float(v))
         if not bars:
-            raise KeyError(
-                f"{_fmt(ts)} is not a trading date in this dataset "
-                f"(calendar spans {_fmt(self.start)} to {_fmt(self.end)}, {len(self)} dates)"
-            )
+            raise KeyError(self._not_a_trading_date(ts))
         return bars
+
+    def view(self, cutoff: pd.Timestamp | str) -> MarketView:
+        """A read-only view of every bar dated at or before ``cutoff``, and nothing after.
+
+        This is the only way strategies see data. ``cutoff`` is inclusive: the
+        bar dated ``cutoff`` is visible (decisions are made after its close).
+        See :mod:`backtester.data.view` for the exact boundary semantics.
+
+        Raises ``KeyError`` if ``cutoff`` is not a date on this calendar, so a
+        view's ``now`` is always a real trading date.
+        """
+        from backtester.data.view import _make_view  # deferred: view.py imports this module
+
+        ts = _as_timestamp(cutoff)
+        if ts not in self._calendar:
+            raise KeyError(self._not_a_trading_date(ts))
+        windows: dict[str, tuple[pd.DatetimeIndex, np.ndarray]] = {}
+        for symbol in self._symbols:
+            n = self._visible_rows(symbol, ts)
+            if n > 0:  # a symbol with no bars yet is invisible, not empty
+                windows[symbol] = (self._index[symbol][:n], self._values[symbol][:n])
+        return _make_view(ts, windows)
+
+    def _visible_rows(self, symbol: str, cutoff: pd.Timestamp) -> int:
+        """How many of ``symbol``'s bars are dated at or before ``cutoff``.
+
+        This one line is the lookahead boundary. Dates are sorted and unique
+        (validated), so ``searchsorted(cutoff, side="right")`` is exactly
+        ``#{d : d <= cutoff}``: the bar on ``cutoff`` is included, and no later
+        bar can be. The test suite's leaky negative control overrides this
+        method to add one row, and the lookahead tests must then fail.
+        """
+        return int(self._index[symbol].searchsorted(cutoff, side="right"))
 
     def frame(self, symbol: str) -> pd.DataFrame:
         """A copy of one symbol's OHLCV frame (safe to modify)."""
@@ -451,6 +486,12 @@ class MarketData:
         """A copy of the full panel, indexed by (date, symbol)."""
         panel = pd.concat(self._frames, names=["symbol", "date"])
         return panel.swaplevel("symbol", "date").sort_index()
+
+    def _not_a_trading_date(self, ts: pd.Timestamp) -> str:
+        return (
+            f"{_fmt(ts)} is not a trading date in this dataset "
+            f"(calendar spans {_fmt(self.start)} to {_fmt(self.end)}, {len(self)} dates)"
+        )
 
 
 def canonicalize_frame(frame: pd.DataFrame) -> pd.DataFrame:
