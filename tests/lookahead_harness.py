@@ -1,4 +1,4 @@
-"""Test doubles and a minimal decision loop for the lookahead tests.
+"""Test doubles and the future-perturbation harness for the lookahead tests.
 
 ``synthetic.py`` only *generates data*. This module holds everything built to
 *expose leaks*:
@@ -10,8 +10,9 @@
 - :class:`MomentumStrategy`: a realistic long/flat strategy, the kind whose
   discrete output could pass a leak test by luck.
 - :class:`LeakyMarketData`: NEGATIVE CONTROL. Its views show one bar too many.
-- :func:`run_decisions`: the decision half of the future engine loop.
-- :func:`assert_no_lookahead`: the future-perturbation check.
+- :func:`run_backtest`: the real engine, with v1's stated execution assumptions.
+- :func:`assert_no_lookahead`: the future-perturbation check, over decisions,
+  equity, cash, positions, and fills.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ import numpy as np
 import pandas as pd
 
 from backtester.data import MarketData, MarketView
+from backtester.engine import Backtester, NextOpenExecution, ZeroCost
+from backtester.results import BacktestResult
 from backtester.strategies import Strategy
 from synthetic import replace_after
 
@@ -56,10 +59,13 @@ def fingerprint(view: MarketView) -> str:
 class ProbeStrategy(Strategy):
     """A strategy that cannot pass a lookahead test by luck.
 
-    Its weight for each visible symbol is ``latest close % 1.0``. That is
-    continuous and deterministic, so any change to the latest close it can see,
-    however small, changes its output. A moving-average crossover, by contrast,
-    only changes its output when a perturbation happens to flip a crossover.
+    Its weight for each visible symbol is ``(latest close % 1.0) / n``, where
+    ``n`` is the number of visible symbols. That is continuous and deterministic,
+    so any change to the latest close it can see, however small, changes its
+    output. A moving-average crossover, by contrast, only changes its output when
+    a perturbation happens to flip a crossover. (Dividing by ``n`` keeps the
+    weights inside the engine's long/flat, unlevered limits: each is in [0, 1)
+    and they sum to less than 1.)
 
     Every call also records ``view.now``, the last date ``history()`` returned for
     each symbol, and a fingerprint of the entire visible panel. Tests compare
@@ -73,16 +79,17 @@ class ProbeStrategy(Strategy):
     def target_weights(self, view: MarketView) -> dict[str, float]:
         weights: dict[str, float] = {}
         last_seen: dict[str, pd.Timestamp] = {}
+        n = len(view.symbols)
         for symbol in view.symbols:
             close = view.history(symbol, "close")
             last_seen[symbol] = close.index[-1]
-            weights[symbol] = float(close.iloc[-1] % 1.0)
+            weights[symbol] = float(close.iloc[-1] % 1.0) / n
         self.observations.append(Observation(view.now, last_seen, fingerprint(view)))
         return weights
 
 
 class PanelProbe(Strategy):
-    """Continuous output read through ``panel(lookback=3)``: ``mean(last 3 closes) % 1.0``."""
+    """Continuous output read through ``panel(lookback=3)``: ``(mean of last 3 closes % 1) / n``."""
 
     warmup = 3
 
@@ -90,7 +97,8 @@ class PanelProbe(Strategy):
         closes = view.panel(["close"], lookback=3)["close"]
         symbols, codes = closes.index.levels[1], closes.index.codes[1]
         means = np.bincount(codes, weights=closes.to_numpy()) / np.bincount(codes)
-        return {str(symbol): float(mean % 1.0) for symbol, mean in zip(symbols, means, strict=True)}
+        n = len(symbols)
+        return {str(s): float(mean % 1.0) / n for s, mean in zip(symbols, means, strict=True)}
 
 
 class MomentumStrategy(Strategy):
@@ -147,31 +155,14 @@ def make_leaky(data: MarketData) -> LeakyMarketData:
 # ---------------------------------------------------------------------------
 
 
-def run_decisions(data: MarketData, strategy: Strategy) -> pd.DataFrame:
-    """The decision half of the future engine loop, and nothing more.
-
-    For every calendar date ``t`` with at least ``strategy.warmup`` dates visible,
-    record ``strategy.target_weights(data.view(t))``. There are no fills,
-    portfolio or equity yet; those arrive with the engine. Returns a
-    (date x symbol) frame of target weights. A symbol the strategy left out is
-    0.0, per the Strategy contract.
-    """
-    dates, rows = [], []
-    for i, t in enumerate(data.calendar):
-        if i + 1 < strategy.warmup:
-            continue
-        view = data.view(t)
-        weights = strategy.target_weights(view)
-        invisible = set(weights) - set(view.symbols)
-        if invisible:
-            raise AssertionError(
-                f"{strategy.name} returned weights for {sorted(invisible)} on "
-                f"{t:%Y-%m-%d}, but they are not visible then"
-            )
-        dates.append(t)
-        rows.append([float(weights.get(symbol, 0.0)) for symbol in data.symbols])
-    index = pd.DatetimeIndex(dates, name="date")
-    return pd.DataFrame(rows, index=index, columns=list(data.symbols))
+def run_backtest(
+    data: MarketData, strategy: Strategy, start: object = None, end: object = None
+) -> BacktestResult:
+    """Run the real engine under v1's stated assumptions: next-open fills, zero cost, $100k."""
+    engine = Backtester(
+        data, strategy, execution=NextOpenExecution(ZeroCost()), initial_cash=100_000
+    )
+    return engine.run(start=start, end=end)
 
 
 def assert_no_lookahead(
@@ -179,25 +170,52 @@ def assert_no_lookahead(
     strategy_factory: Callable[[], Strategy],
     cutoff: pd.Timestamp,
     seed: int = 7,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+    end: object = None,
+) -> tuple[BacktestResult, BacktestResult]:
     """Future-perturbation check: rewriting the future must not change the past.
 
-    Runs a fresh strategy on ``data`` and another on ``replace_after(data, cutoff,
-    seed)``, then requires every decision dated at or before ``cutoff`` to be
-    bit-for-bit identical. For probes, it also requires everything they
-    *observed* up to ``cutoff`` to be identical. Returns both decision frames so
-    callers can check where they diverge.
+    Runs the full engine with a fresh strategy on ``data``, and again on
+    ``replace_after(data, cutoff, seed)``. Everything dated at or before
+    ``cutoff`` must then be bit-for-bit identical: decisions, equity, cash,
+    positions, and fills. For probes, everything they *observed* up to
+    ``cutoff`` must match too. Returns both results so callers can check where
+    they diverge.
+
+    Decisions are checked first on purpose. A one-bar leak changes the decision
+    at the cutoff itself, but that decision only trades at the next open, so
+    equity and positions through the cutoff are unaffected by it. Equity alone
+    therefore cannot catch that leak; see ``test_lookahead.py``.
     """
     cutoff = pd.Timestamp(cutoff)
     original, perturbed = strategy_factory(), strategy_factory()
-    base = run_decisions(data, original)
-    alt = run_decisions(replace_after(data, cutoff, seed), perturbed)
+    base = run_backtest(data, original, end=end)
+    alt = run_backtest(replace_after(data, cutoff, seed), perturbed, end=end)
 
+    label = f"{original.name} {{}} at or before {cutoff:%Y-%m-%d}"
     pd.testing.assert_frame_equal(
-        base.loc[:cutoff],
-        alt.loc[:cutoff],
+        base.decisions.loc[:cutoff],
+        alt.decisions.loc[:cutoff],
         check_exact=True,
-        obj=f"{original.name} decisions at or before {cutoff:%Y-%m-%d}",
+        obj=label.format("decisions"),
+    )
+    for name in ("equity", "cash"):
+        pd.testing.assert_series_equal(
+            getattr(base, name).loc[:cutoff],
+            getattr(alt, name).loc[:cutoff],
+            check_exact=True,
+            obj=label.format(name),
+        )
+    pd.testing.assert_frame_equal(
+        base.positions.loc[:cutoff],
+        alt.positions.loc[:cutoff],
+        check_exact=True,
+        obj=label.format("positions"),
+    )
+    pd.testing.assert_frame_equal(
+        base.fills[base.fills["date"] <= cutoff],
+        alt.fills[alt.fills["date"] <= cutoff],
+        check_exact=True,
+        obj=label.format("fills"),
     )
     if isinstance(original, ProbeStrategy) and isinstance(perturbed, ProbeStrategy):
         seen = [o for o in original.observations if o.now <= cutoff]
@@ -208,7 +226,11 @@ def assert_no_lookahead(
     return base, alt
 
 
-def first_divergence(a: pd.DataFrame, b: pd.DataFrame) -> pd.Timestamp | None:
-    """The first date on which two decision frames differ, or ``None`` if they never do."""
-    differs = (a != b).any(axis=1)
+def first_divergence(
+    a: pd.DataFrame | pd.Series, b: pd.DataFrame | pd.Series
+) -> pd.Timestamp | None:
+    """The first date on which two date-indexed frames or series differ, or ``None``."""
+    differs = a != b
+    if isinstance(differs, pd.DataFrame):
+        differs = differs.any(axis=1)
     return differs.idxmax() if differs.any() else None

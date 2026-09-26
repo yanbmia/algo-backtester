@@ -1,28 +1,27 @@
-"""The lookahead guard, proven from the outside.
+"""The lookahead guard, proven from the outside, through the real engine.
 
 1. Future-perturbation invariance: rewriting everything after a cutoff must not
-   change any decision (or anything a probe observed) at or before it.
+   change anything the engine produced at or before it: decisions, equity, cash,
+   positions, fills, or anything a probe observed.
 2. Negative control: the same checks must FAIL against a deliberately leaky view.
    If they did not, they would not be checking anything.
 3. Boundary: at every step the latest bar a strategy can see is dated exactly
    ``view.now`` (or earlier, for a symbol that did not trade that day).
 4. Read-only: data handed to strategies cannot be written, and cannot reach
    the parent MarketData or later views.
-
-There is no engine yet, so "decisions" are the target weights a strategy returns
-at each date (see ``lookahead_harness.run_decisions``). Equity and positions will
-be added to the same invariance check when the engine exists.
 """
 
 from __future__ import annotations
 
 import contextlib
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import pytest
 
 from backtester.data import MarketData, YFinanceLoader
+from backtester.strategies import BuyAndHold, SMACrossover
 from lookahead_harness import (
     LeakyMarketData,
     MomentumStrategy,
@@ -32,25 +31,50 @@ from lookahead_harness import (
     assert_no_lookahead,
     first_divergence,
     make_leaky,
-    run_decisions,
+    run_backtest,
 )
 from synthetic import replace_after
 
-STRATEGIES = [ProbeStrategy, PanelProbe, MomentumStrategy]
+# Each entry builds a fresh strategy for a dataset. The probes can't pass by luck;
+# SMACrossover and BuyAndHold are the real v1 strategies (SMA with short windows
+# so it trades within the synthetic runs).
+STRATEGIES = {
+    "ProbeStrategy": lambda data: ProbeStrategy(),
+    "PanelProbe": lambda data: PanelProbe(),
+    "MomentumStrategy": lambda data: MomentumStrategy(),
+    "SMACrossover": lambda data: SMACrossover(data.symbols[0], fast=5, slow=20),
+    "BuyAndHold": lambda data: BuyAndHold(data.symbols[0]),
+}
 CUTOFF_FRACTIONS = [0.3, 0.5, 0.8]
 
 
-def cutoff_at(data: MarketData, fraction: float) -> pd.Timestamp:
-    return data.calendar[int(len(data) * fraction)]
+@dataclass(frozen=True)
+class Scenario:
+    """A dataset plus the run window the engine accepts for it."""
 
+    data: MarketData
+    end: pd.Timestamp | None = None
 
-def next_date(data: MarketData, t: pd.Timestamp) -> pd.Timestamp:
-    return data.calendar[data.calendar.get_loc(t) + 1]
+    @property
+    def run_dates(self) -> pd.DatetimeIndex:
+        calendar = self.data.calendar
+        return calendar if self.end is None else calendar[calendar <= self.end]
+
+    def cutoff(self, fraction: float) -> pd.Timestamp:
+        return self.run_dates[int(len(self.run_dates) * fraction)]
+
+    def next_date(self, t: pd.Timestamp) -> pd.Timestamp:
+        return self.run_dates[self.run_dates.get_loc(t) + 1]
 
 
 @pytest.fixture(params=["shared_calendar", "staggered_calendars"])
-def dataset(request, market_data, staggered_market_data) -> MarketData:
-    return market_data if request.param == "shared_calendar" else staggered_market_data
+def scenario(request, market_data, staggered_market_data) -> Scenario:
+    if request.param == "shared_calendar":
+        return Scenario(market_data)
+    # The v1 engine rejects a symbol that stops trading mid-run, so this run ends on
+    # GONE's last day. MID still lists partway through (2020-04-01), and LATE lists
+    # after the run ends, so it is never visible.
+    return Scenario(staggered_market_data, end=pd.Timestamp("2020-07-31"))
 
 
 # ---------------------------------------------------------------------------
@@ -60,49 +84,67 @@ def dataset(request, market_data, staggered_market_data) -> MarketData:
 
 class TestFuturePerturbation:
     @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
-    @pytest.mark.parametrize("factory", STRATEGIES, ids=lambda f: f.__name__)
-    def test_decisions_at_or_before_cutoff_ignore_the_future(self, dataset, factory, fraction):
-        assert_no_lookahead(dataset, factory, cutoff_at(dataset, fraction))
+    @pytest.mark.parametrize("build", STRATEGIES.values(), ids=STRATEGIES.keys())
+    def test_nothing_at_or_before_the_cutoff_depends_on_the_future(self, scenario, build, fraction):
+        data = scenario.data
+        assert_no_lookahead(data, lambda: build(data), scenario.cutoff(fraction), end=scenario.end)
+
+    def test_the_crossover_really_trades_in_these_scenarios(self, scenario):
+        # Otherwise its invariance check above would be vacuous (always flat).
+        strategy = STRATEGIES["SMACrossover"](scenario.data)
+        result = run_backtest(scenario.data, strategy, end=scenario.end)
+
+        assert set(result.decisions[strategy.symbol]) == {0.0, 1.0}
+        assert len(result.fills) >= 4
 
     @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
-    def test_perturbation_rewrites_only_the_future(self, dataset, fraction):
-        cutoff = cutoff_at(dataset, fraction)
-        perturbed = replace_after(dataset, cutoff, seed=7)
+    def test_perturbation_rewrites_only_the_future(self, scenario, fraction):
+        data, cutoff = scenario.data, scenario.cutoff(fraction)
+        perturbed = replace_after(data, cutoff, seed=7)
 
-        assert perturbed.calendar.equals(dataset.calendar)
-        for symbol in dataset.symbols:
-            original, rewritten = dataset.frame(symbol), perturbed.frame(symbol)
+        assert perturbed.calendar.equals(data.calendar)
+        for symbol in data.symbols:
+            original, rewritten = data.frame(symbol), perturbed.frame(symbol)
             pd.testing.assert_frame_equal(original.loc[:cutoff], rewritten.loc[:cutoff])
             future = original.index > cutoff
             # Every future value differs, so an invariance pass cannot be a coincidence.
             assert (original[future].to_numpy() != rewritten[future].to_numpy()).all()
 
     @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
-    def test_probe_reacts_to_the_perturbation_on_the_very_next_bar(self, dataset, fraction):
-        # The flip side of invariance: the probe is sensitive enough that the first
-        # perturbed bar changes its decision immediately. So when it stays unchanged
-        # up to the cutoff, that is because it could not see the future.
-        cutoff = cutoff_at(dataset, fraction)
+    def test_perturbation_shows_up_on_the_very_next_bar(self, scenario, fraction):
+        # The flip side of invariance: the first perturbed bar changes the probe's
+        # decision, fills, positions and equity immediately. So when they stay
+        # unchanged up to the cutoff, it is because nothing could see the future.
+        cutoff = scenario.cutoff(fraction)
+        following = scenario.next_date(cutoff)
 
-        base, alt = assert_no_lookahead(dataset, ProbeStrategy, cutoff)
+        base, alt = assert_no_lookahead(scenario.data, ProbeStrategy, cutoff, end=scenario.end)
 
-        assert first_divergence(base, alt) == next_date(dataset, cutoff)
+        assert first_divergence(base.decisions, alt.decisions) == following
+        assert first_divergence(base.positions, alt.positions) == following
+        assert first_divergence(base.equity, alt.equity) == following
 
     def test_a_symbol_that_lists_after_the_cutoff_is_invisible(self, staggered_market_data):
-        # Knowing a ticker WILL exist is future information. Decisions and everything
-        # the probe observed up to the cutoff must be identical whether or not the
-        # later listing is in the dataset at all.
-        cutoff = pd.Timestamp("2020-08-14")  # LATE lists on 2020-09-01
-        kept = [s for s in staggered_market_data.symbols if s != "LATE"]
-        without_late = MarketData.from_frames({s: staggered_market_data.frame(s) for s in kept})
+        # Knowing a ticker WILL exist is future information. Everything up to the
+        # cutoff must be identical whether or not the later listing is in the data.
+        data, end = staggered_market_data, pd.Timestamp("2020-07-31")
+        cutoff = pd.Timestamp("2020-03-20")  # MID lists on 2020-04-01
+        without_mid = MarketData.from_frames({s: data.frame(s) for s in data.symbols if s != "MID"})
         with_probe, without_probe = ProbeStrategy(), ProbeStrategy()
 
-        with_late = run_decisions(staggered_market_data, with_probe)
-        without = run_decisions(without_late, without_probe)
+        with_mid = run_backtest(data, with_probe, end=end)
+        without = run_backtest(without_mid, without_probe, end=end)
 
-        assert (with_late.loc[:cutoff, "LATE"] == 0.0).all()
-        pd.testing.assert_frame_equal(
-            with_late.loc[:cutoff].drop(columns="LATE"), without.loc[:cutoff], check_exact=True
+        assert (with_mid.decisions.loc[:cutoff, "MID"] == 0.0).all()
+        assert (with_mid.positions.loc[:cutoff, "MID"] == 0.0).all()
+        for frame in ("decisions", "positions"):
+            pd.testing.assert_frame_equal(
+                getattr(with_mid, frame).loc[:cutoff].drop(columns="MID"),
+                getattr(without, frame).loc[:cutoff],
+                check_exact=True,
+            )
+        pd.testing.assert_series_equal(
+            with_mid.equity.loc[:cutoff], without.equity.loc[:cutoff], check_exact=True
         )
         seen_with = [o for o in with_probe.observations if o.now <= cutoff]
         seen_without = [o for o in without_probe.observations if o.now <= cutoff]
@@ -121,19 +163,33 @@ class TestNegativeControl:
         leaky = make_leaky(market_data)
 
         with pytest.raises(AssertionError, match="decisions at or before"):
-            assert_no_lookahead(leaky, factory, cutoff_at(market_data, fraction))
+            assert_no_lookahead(leaky, factory, Scenario(market_data).cutoff(fraction))
 
     @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
-    def test_leak_is_detected_exactly_one_bar_early(self, market_data, fraction):
+    def test_leak_changes_the_decision_at_the_cutoff_itself(self, market_data, fraction):
         # Honest view: the first changed decision is the first perturbed bar (T+1).
-        # Leaky view: it is already visible at the cutoff T itself.
-        cutoff = cutoff_at(market_data, fraction)
+        # Leaky view: that bar is already visible at the cutoff T.
+        cutoff = Scenario(market_data).cutoff(fraction)
         leaky = make_leaky(market_data)
 
-        base = run_decisions(leaky, ProbeStrategy())
-        alt = run_decisions(replace_after(leaky, cutoff, seed=7), ProbeStrategy())
+        base = run_backtest(leaky, ProbeStrategy())
+        alt = run_backtest(replace_after(leaky, cutoff, seed=7), ProbeStrategy())
 
-        assert first_divergence(base, alt) == cutoff
+        assert first_divergence(base.decisions, alt.decisions) == cutoff
+
+    @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
+    def test_equity_alone_cannot_see_a_one_bar_leak(self, market_data, fraction):
+        # Why assert_no_lookahead checks decisions, not just equity: the leaked
+        # decision at T trades at T+1's open, and T+1 is perturbed anyway. So the
+        # leaky run's equity diverges exactly where an honest run's does.
+        scenario = Scenario(market_data)
+        cutoff = scenario.cutoff(fraction)
+        leaky = make_leaky(market_data)
+
+        base = run_backtest(leaky, ProbeStrategy())
+        alt = run_backtest(replace_after(leaky, cutoff, seed=7), ProbeStrategy())
+
+        assert first_divergence(base.equity, alt.equity) == scenario.next_date(cutoff)
 
     def test_the_leak_is_subtle(self, market_data):
         # The leaky view reports the correct date and looks normal. Only its
@@ -173,25 +229,27 @@ def assert_seen_only_up_to_now(data: MarketData, observations: list[Observation]
 
 
 class TestBoundary:
-    def test_probe_sees_exactly_up_to_now_at_every_step(self, dataset):
+    def test_probe_sees_exactly_up_to_now_at_every_step(self, scenario):
         probe = ProbeStrategy()
 
-        run_decisions(dataset, probe)
+        result = run_backtest(scenario.data, probe, end=scenario.end)
 
-        assert [o.now for o in probe.observations] == list(dataset.calendar)
-        assert_seen_only_up_to_now(dataset, probe.observations)
+        assert [o.now for o in probe.observations] == list(scenario.run_dates)
+        assert list(result.decisions.index) == list(scenario.run_dates)
+        assert_seen_only_up_to_now(scenario.data, probe.observations)
 
     def test_boundary_check_fails_against_a_leaky_view(self, market_data):
         leaky = make_leaky(market_data)
         probe = ProbeStrategy()
-        run_decisions(leaky, probe)
+        run_backtest(leaky, probe)
 
         with pytest.raises(AssertionError, match="the probe saw"):
             assert_seen_only_up_to_now(leaky, probe.observations)
 
-    def test_latest_visible_bar_is_the_bar_the_engine_sees_on_that_date(self, dataset):
-        for t in dataset.calendar[::5]:
-            view, bars = dataset.view(t), dataset.bar(t)
+    def test_latest_visible_bar_is_the_bar_the_engine_sees_on_that_date(self, scenario):
+        data = scenario.data
+        for t in scenario.run_dates[::5]:
+            view, bars = data.view(t), data.bar(t)
             for symbol, bar in bars.items():
                 for field in ("open", "high", "low", "close", "volume"):
                     history = view.history(symbol, field)
@@ -294,12 +352,12 @@ class TestReadOnly:
 
 @pytest.mark.network
 @pytest.mark.parametrize("fraction", CUTOFF_FRACTIONS)
-def test_live_spy_decisions_ignore_the_future(tmp_path, fraction):
-    spy = YFinanceLoader(tmp_path).load(["SPY"], "2020-01-01", "2020-12-31")
-    cutoff = cutoff_at(spy, fraction)
+def test_live_spy_backtest_ignores_the_future(tmp_path, fraction):
+    spy = Scenario(YFinanceLoader(tmp_path).load(["SPY"], "2020-01-01", "2020-12-31"))
+    cutoff = spy.cutoff(fraction)
 
-    base, alt = assert_no_lookahead(spy, ProbeStrategy, cutoff)
-    assert first_divergence(base, alt) == next_date(spy, cutoff)
+    base, alt = assert_no_lookahead(spy.data, ProbeStrategy, cutoff)
+    assert first_divergence(base.decisions, alt.decisions) == spy.next_date(cutoff)
 
     with pytest.raises(AssertionError):
-        assert_no_lookahead(make_leaky(spy), ProbeStrategy, cutoff)
+        assert_no_lookahead(make_leaky(spy.data), ProbeStrategy, cutoff)

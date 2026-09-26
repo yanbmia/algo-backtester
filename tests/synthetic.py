@@ -55,6 +55,35 @@ def make_ohlcv(
     )
 
 
+def ohlcv_from_closes(closes: list[float], start: str = "2020-01-02") -> pd.DataFrame:
+    """Valid bars with exactly the given closes, one per business day from ``start``.
+
+    open = close, high = close + 1, low = close - 1, so a test controls the
+    closes precisely (e.g. to force a moving-average crossover on a known date).
+    """
+    close = np.asarray(closes, dtype="float64")
+    return pd.DataFrame(
+        {"open": close, "high": close + 1.0, "low": close - 1.0, "close": close, "volume": 1e6},
+        index=pd.bdate_range(start, periods=len(close), name="date"),
+    )
+
+
+def make_gapped_ohlcv(n_days: int = 30, start: str = "2020-01-02") -> pd.DataFrame:
+    """Valid bars whose open is always far from every close, so a fill price names its bar.
+
+    Row ``i`` has open = 1000 + i and close = 500 + i. For a decision on row
+    ``d``, the correct fill (next open) is 1000 + d + 1. A fill at the decision's
+    close would be 500 + d, and a fill at the decision bar's own open 1000 + d:
+    any timing bug shows up as an unmistakably wrong price.
+    """
+    i = np.arange(n_days, dtype="float64")
+    open_, close = 1000.0 + i, 500.0 + i
+    return pd.DataFrame(
+        {"open": open_, "high": open_ + 1.0, "low": close - 1.0, "close": close, "volume": 1e6},
+        index=pd.bdate_range(start, periods=n_days, name="date"),
+    )
+
+
 def corrupt(frame: pd.DataFrame, row: int = BAD_ROW, **values: float) -> pd.DataFrame:
     """A copy of ``frame`` with the given column values overwritten at position ``row``."""
     out = frame.copy()
