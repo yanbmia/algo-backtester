@@ -16,9 +16,12 @@ import pytest
 from backtester.metrics import (
     annualized_vol,
     cagr,
+    compare,
+    comparison_window,
     drawdown_series,
     exposure,
     max_drawdown,
+    rebased_equity,
     sharpe,
     summarize,
     total_return,
@@ -223,3 +226,134 @@ class TestSummarize:
 
         assert list(table.index) == ["hand-built", "another"]
         assert {"sharpe", "max_drawdown", "cagr"} <= set(table.columns)
+
+
+def make_result(
+    name: str, equity: list[float], first_decision: int, held: list[float], fill_days: list[int]
+) -> BacktestResult:
+    """A minimal result: equity, positions and fills on DATES, deciding from ``first_decision``."""
+    dates = DATES[: len(equity)]
+    equity_s = pd.Series(equity, index=dates, name="equity", dtype=float)
+    fills = pd.DataFrame(
+        [(dates[d], "AAA", 1.0, 100.0, 0.0) for d in fill_days], columns=list(FILL_COLUMNS)
+    )
+    return BacktestResult(
+        strategy_name=name,
+        equity=equity_s,
+        returns=equity_s.pct_change().fillna(0.0),
+        cash=pd.Series(0.0, index=dates),
+        positions=pd.DataFrame({"AAA": held}, index=dates),
+        decisions=pd.DataFrame({"AAA": 1.0}, index=dates[first_decision:]),
+        fills=fills,
+        config={},
+    )
+
+
+@pytest.fixture
+def slow_and_fast_starters() -> tuple[BacktestResult, BacktestResult]:
+    """A strategy that first decides on day 3, and a benchmark that decides on day 0.
+
+    The benchmark gains 20% (100 -> 120) during the strategy's warmup. Measured
+    from day 3 it only gains 15% (120 -> 138).
+    """
+    strategy = make_result(
+        "strategy",
+        [100, 100, 100, 100, 110, 99, 121, 121],
+        first_decision=3,
+        held=[0, 0, 0, 0, 1, 1, 1, 0],
+        fill_days=[4, 7],
+    )
+    benchmark = make_result(
+        "benchmark",
+        [100, 105, 110, 120, 126, 120, 132, 138],
+        first_decision=0,
+        held=[0, 1, 1, 1, 1, 1, 1, 1],
+        fill_days=[1],
+    )
+    return strategy, benchmark
+
+
+class TestCompare:
+    def test_window_starts_at_the_latest_first_decision(self, slow_and_fast_starters):
+        assert comparison_window(slow_and_fast_starters) == (DATES[3], DATES[7])
+        assert comparison_window(slow_and_fast_starters[::-1]) == (DATES[3], DATES[7])
+
+    def test_benchmark_gets_no_head_start(self, slow_and_fast_starters):
+        strategy, benchmark = slow_and_fast_starters
+
+        table = compare([strategy, benchmark], periods_per_year=4, base=100_000)
+
+        assert list(table.index) == ["strategy", "benchmark"]
+        assert set(table["start"]) == {DATES[3]}
+        # strategy 100 -> 121 on days 3..7; benchmark 120 -> 138 on the same days
+        assert table.loc["strategy", "total_return"] == pytest.approx(0.21)
+        assert table.loc["benchmark", "total_return"] == pytest.approx(0.15)
+        assert table.loc["strategy", "ending_value"] == pytest.approx(121_000)
+        assert table.loc["benchmark", "ending_value"] == pytest.approx(115_000)
+        assert "final_equity" not in table.columns
+
+    def test_every_metric_uses_the_common_window(self, slow_and_fast_starters):
+        benchmark = compare(slow_and_fast_starters, periods_per_year=4).loc["benchmark"]
+
+        # Benchmark window equity: 120, 126, 120, 132, 138. Worst fall 126 -> 120.
+        assert benchmark["max_drawdown"] == pytest.approx(-6 / 126)
+        assert (benchmark["max_drawdown_peak"], benchmark["max_drawdown_trough"]) == (
+            DATES[4],
+            DATES[5],
+        )
+        assert benchmark["cagr"] == pytest.approx(0.15)  # 4 periods = 1 year
+        assert benchmark["exposure"] == 1.0
+        assert benchmark["n_fills"] == 0  # its only fill (day 1) is before the window
+
+    def test_standalone_summaries_are_unchanged(self, slow_and_fast_starters):
+        _, benchmark = slow_and_fast_starters
+        solo = summarize(benchmark, periods_per_year=4)
+
+        assert solo["start"] == DATES[0]
+        assert solo["total_return"] == pytest.approx(0.38)  # its own window: 100 -> 138
+        assert solo["n_fills"] == 1
+
+    def test_rebased_equity_starts_every_curve_at_the_same_value(self, slow_and_fast_starters):
+        curves = rebased_equity(slow_and_fast_starters, base=100.0)
+
+        assert list(curves.columns) == ["strategy", "benchmark"]
+        assert curves.index[0] == DATES[3]
+        np.testing.assert_allclose(curves["strategy"], [100, 110, 99, 121, 121])
+        np.testing.assert_allclose(curves["benchmark"], [100, 105, 100, 110, 115])
+
+    def test_results_from_different_data_cannot_be_compared(self, slow_and_fast_starters):
+        strategy, _ = slow_and_fast_starters
+        other = make_result("other", [100] * 8, 0, [0] * 8, [])
+        gappy = DATES[[0, 1, 2, 3, 4, 6, 7, 8]]  # no bar on DATES[5]
+        other = BacktestResult(**{**other.__dict__, "equity": other.equity.set_axis(gappy)})
+
+        with pytest.raises(ValueError, match="different trading dates"):
+            compare([strategy, other])
+
+    def test_names_must_be_unique(self, slow_and_fast_starters):
+        strategy, _ = slow_and_fast_starters
+        with pytest.raises(ValueError, match="names must be unique"):
+            compare([strategy, strategy])
+
+    def test_no_overlap_after_warmup_is_an_error(self):
+        late = make_result("late", [100, 100, 100], first_decision=2, held=[0, 0, 0], fill_days=[])
+        with pytest.raises(ValueError, match="do not overlap"):
+            comparison_window([late])
+
+
+class TestSummarizeWindow:
+    def test_start_cannot_include_warmup(self, slow_and_fast_starters):
+        strategy, _ = slow_and_fast_starters
+        with pytest.raises(ValueError, match="before strategy's first decision"):
+            summarize(strategy, start=DATES[1])
+
+    def test_window_bounds_must_be_run_dates(self, slow_and_fast_starters):
+        strategy, _ = slow_and_fast_starters
+        with pytest.raises(ValueError, match="not a trading date"):
+            summarize(strategy, start="2021-01-09")  # a Saturday
+
+    def test_explicit_end_narrows_the_window(self, slow_and_fast_starters):
+        strategy, _ = slow_and_fast_starters
+        row = summarize(strategy, start=DATES[3], end=DATES[5])
+        assert row["total_return"] == pytest.approx(-0.01)  # 100 -> 99
+        assert row["n_fills"] == 1  # the day-4 fill

@@ -1,0 +1,24 @@
+# One config = one experiment. Everything a run depends on is pinned here, so
+# rerunning it reproduces the same numbers and figures.
+#
+# Relative paths are resolved from this file's folder, not from wherever the
+# script happens to be run.
+
+name: sma_spy                 # used in output file names
+
+data:
+  symbol: SPY
+  start: 2004-01-02           # first trading day of 2004
+  end: 2024-12-31             # pinned, never "today", so results don't drift on rerun
+  cache_dir: ../data/cache
+
+strategy:                     # SMACrossover windows, fixed in advance (not tuned on this data)
+  fast: 50
+  slow: 200
+
+backtest:
+  initial_cash: 100000
+  costs: zero                 # v1's stated assumption: no commissions, spread, or slippage
+
+output:
+  reports_dir: ../reports     # tables here; figures in <reports_dir>/figures

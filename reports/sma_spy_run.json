@@ -1,0 +1,73 @@
+{
+  "experiment": "sma_spy",
+  "config": {
+    "config_file": "sma_spy.yaml",
+    "name": "sma_spy",
+    "data": {
+      "symbol": "SPY",
+      "start": "2004-01-02",
+      "end": "2024-12-31",
+      "cache_dir": "../data/cache"
+    },
+    "strategy": {
+      "fast": 50,
+      "slow": 200
+    },
+    "backtest": {
+      "initial_cash": 100000.0,
+      "costs": "zero"
+    },
+    "output": {
+      "reports_dir": "../reports"
+    }
+  },
+  "data": {
+    "symbol": "SPY",
+    "first_bar": "2004-01-02",
+    "last_bar": "2024-12-31",
+    "bars": 5285,
+    "cache": {
+      "schema_version": 1,
+      "symbol": "SPY",
+      "source": "yfinance",
+      "source_version": "1.7.0",
+      "interval": "1d",
+      "auto_adjust": true,
+      "requested_start": "2004-01-02",
+      "requested_end": "2024-12-31",
+      "first_date": "2004-01-02",
+      "last_date": "2024-12-31",
+      "n_rows": 5285,
+      "downloaded_at": "2026-09-27T01:19:25+00:00",
+      "parquet_file": "SPY_1d.parquet",
+      "sha256": "33c2c5446610378e7fdab1dc59332eb984dbb0ed356190770ee9c0d66d488d5c"
+    }
+  },
+  "comparison_window": {
+    "start": "2004-10-18",
+    "end": "2024-12-31"
+  },
+  "strategies": {
+    "sma_crossover(SPY, 50, 200)": {
+      "first_decision": "2004-10-18",
+      "fills": 19,
+      "execution": "NextOpenExecution(cost_model=ZeroCost())",
+      "timing": "decide at close t; size and fill at open t+1",
+      "share_sizing": "fractional"
+    },
+    "buy_and_hold(SPY)": {
+      "first_decision": "2004-01-02",
+      "fills": 1,
+      "execution": "NextOpenExecution(cost_model=ZeroCost())",
+      "timing": "decide at close t; size and fill at open t+1",
+      "share_sizing": "fractional"
+    }
+  },
+  "versions": {
+    "python": "3.14.2",
+    "backtester": "0.1.0",
+    "pandas": "3.0.6",
+    "numpy": "2.5.3",
+    "matplotlib": "3.11.2"
+  }
+}

@@ -22,6 +22,17 @@ Conventions (stated once, used everywhere)
 - **Drawdown** is measured from the running peak and reported as a negative
   fraction: -0.25 means 25% below the highest value reached so far.
 
+Comparing strategies
+--------------------
+``summarize`` scores one strategy over its own window, from its first
+decision. Strategies with different warmups therefore start on different
+days. Anything that puts strategies side by side (``compare``,
+``rebased_equity``, and the charts built on them) uses one common window from
+``comparison_window``, which starts at the *latest* first decision, so a
+benchmark with no warmup is not credited with gains made while the other
+strategy could not yet trade. The alignment lives here, next to the metrics,
+so the script, the notebook, and the charts share one tested rule.
+
 Invalid input raises ``ValueError``. The one metric that can be undefined on
 valid input is Sharpe with zero volatility (e.g. a strategy that never
 trades), which returns ``NaN`` rather than a misleading number.
@@ -30,6 +41,7 @@ trades), which returns ``NaN`` rather than a misleading number.
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -125,21 +137,39 @@ def summarize(
     result: BacktestResult,
     rf_annual: float = 0.0,
     periods_per_year: float = TRADING_DAYS_PER_YEAR,
+    *,
+    start: pd.Timestamp | str | None = None,
+    end: pd.Timestamp | str | None = None,
 ) -> pd.Series:
     """One row of headline metrics for a backtest, named after the strategy.
 
-    Everything is measured over the **evaluation window**: from the close of
-    the first decision date to the end of the run. Warmup days, when the
-    strategy could not yet act, are excluded, so they don't drag down returns
-    or Sharpe. The window's start and end are part of the row, so strategies
-    evaluated over different windows are easy to spot. Rows from several
-    results combine with ``pd.DataFrame([summarize(a), summarize(b)])``.
+    By default everything is measured over the strategy's own **evaluation
+    window**: from the close of its first decision date to the end of the run.
+    Warmup days, when the strategy could not yet act, are excluded, so they
+    don't drag down returns or Sharpe. The window's start and end are part of
+    the row, so strategies evaluated over different windows are easy to spot.
+
+    ``start`` and ``end`` narrow the window (``compare`` uses them to put several
+    strategies on one common window). Both must be dates in the run, and
+    ``start`` may not be earlier than the first decision, because that would
+    count warmup days.
     """
-    start = result.decisions.index[0]
-    equity = result.equity.loc[start:]
+    first = result.decisions.index[0]
+    lo = first if start is None else _run_date(result, start, "start")
+    hi = result.equity.index[-1] if end is None else _run_date(result, end, "end")
+    if lo < first:
+        raise ValueError(
+            f"start {lo:%Y-%m-%d} is before {result.strategy_name}'s first decision "
+            f"({first:%Y-%m-%d}); that would count warmup days"
+        )
+    if hi < lo:
+        raise ValueError(f"end {hi:%Y-%m-%d} is before start {lo:%Y-%m-%d}")
+
+    equity = result.equity.loc[lo:hi]
     returns = equity.pct_change().iloc[1:]
     depth, peak, trough = max_drawdown(equity)
     enough = len(returns) >= 2
+    fill_dates = result.fills["date"]
     return pd.Series(
         {
             "start": equity.index[0],
@@ -152,11 +182,90 @@ def summarize(
             "max_drawdown": depth,
             "max_drawdown_peak": peak,
             "max_drawdown_trough": trough,
-            "exposure": exposure(result.positions.loc[start:]),
-            "n_fills": len(result.fills),
+            "exposure": exposure(result.positions.loc[lo:hi]),
+            # Fills on `lo` itself happened at that morning's open, before the
+            # window's first close, so they belong to the period before it.
+            "n_fills": int(((fill_dates > lo) & (fill_dates <= hi)).sum()),
             "final_equity": float(equity.iloc[-1]),
         },
         name=result.strategy_name,
+    )
+
+
+# --- comparing strategies ---------------------------------------------------------
+
+
+def comparison_window(results: Sequence[BacktestResult]) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """The one window every strategy in ``results`` can be judged over.
+
+    It starts at the **latest** first-decision date among them, so no strategy
+    gets a head start while another is still warming up (a 200-day moving
+    average cannot act for its first 199 days; buy-and-hold can). It ends at the
+    earliest last date. Every result must have the same trading dates inside
+    the window, i.e. come from the same data.
+    """
+    if not results:
+        raise ValueError("need at least one result to compare")
+    start = max(r.decisions.index[0] for r in results)
+    end = min(r.equity.index[-1] for r in results)
+    if start >= end:
+        raise ValueError(
+            f"the results do not overlap after warmup (common window {start:%Y-%m-%d} "
+            f"to {end:%Y-%m-%d})"
+        )
+    dates = results[0].equity.loc[start:end].index
+    for result in results[1:]:
+        if not result.equity.loc[start:end].index.equals(dates):
+            raise ValueError(
+                f"{result.strategy_name} and {results[0].strategy_name} have different "
+                "trading dates in the comparison window; compare results run on the same data"
+            )
+    return start, end
+
+
+def compare(
+    results: Sequence[BacktestResult],
+    rf_annual: float = 0.0,
+    periods_per_year: float = TRADING_DAYS_PER_YEAR,
+    base: float = 1.0,
+) -> pd.DataFrame:
+    """Side-by-side metrics for several strategies over their common window.
+
+    Each row is ``summarize(result, start=..., end=...)`` over
+    ``comparison_window(results)``, one row per strategy, indexed by strategy
+    name. Raw ``final_equity`` is replaced by ``ending_value``: what ``base``
+    invested at the window's start grew to. A strategy that was already
+    invested before the window (e.g. buy-and-hold) would otherwise carry its
+    head start into the table.
+
+    The window starts at a close. A strategy that is already invested at that
+    close (buy-and-hold) also earns the first overnight move, while one that
+    decides at that close trades at the next open. Over a multi-year window
+    that is a single day.
+    """
+    names = [r.strategy_name for r in results]
+    if len(set(names)) != len(names):
+        raise ValueError(f"strategy names must be unique to compare them, got {names}")
+    start, end = comparison_window(results)
+    rows = []
+    for result in results:
+        row = summarize(result, rf_annual, periods_per_year, start=start, end=end)
+        row = row.drop("final_equity")
+        row["ending_value"] = base * (1.0 + row["total_return"])
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def rebased_equity(results: Sequence[BacktestResult], base: float = 1.0) -> pd.DataFrame:
+    """Each strategy's equity over the common window, rescaled to start at ``base``.
+
+    One column per strategy (named after it), indexed by date. This is what a
+    comparison chart should draw: every curve starts from the same value on
+    the same day.
+    """
+    start, end = comparison_window(results)
+    return pd.DataFrame(
+        {r.strategy_name: base * r.equity.loc[start:end] / r.equity.loc[start] for r in results}
     )
 
 
@@ -185,6 +294,15 @@ def _return_values(returns: pd.Series) -> np.ndarray:
     if not np.isfinite(values).all():
         raise ValueError("returns contain NaN or infinite values")
     return values
+
+
+def _run_date(result: BacktestResult, value: pd.Timestamp | str, name: str) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts not in result.equity.index:
+        raise ValueError(
+            f"{name} {ts:%Y-%m-%d} is not a trading date in {result.strategy_name}'s run"
+        )
+    return ts
 
 
 def _positive(value: float, name: str) -> float:

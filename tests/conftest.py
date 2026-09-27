@@ -95,3 +95,56 @@ def value_case(request: pytest.FixtureRequest) -> InvalidCase:
 def structural_case(request: pytest.FixtureRequest) -> InvalidCase:
     """Each malformed-frame case in turn (one broken rule per case)."""
     return request.param
+
+
+# ---------------------------------------------------------------------------
+# Experiments (config file + pre-filled data cache, no network)
+# ---------------------------------------------------------------------------
+
+#: A small experiment: SMA(5, 20) on a year of synthetic "SPY", $100k, no costs.
+BASE_CONFIG: dict = {
+    "name": "test_run",
+    "data": {
+        "symbol": "SPY",
+        "start": "2020-01-02",
+        "end": "2020-12-31",
+        "cache_dir": "../data/cache",
+    },
+    "strategy": {"fast": 5, "slow": 20},
+    "backtest": {"initial_cash": 100_000, "costs": "zero"},
+    "output": {"reports_dir": "../reports"},
+}
+
+
+@pytest.fixture
+def make_config(tmp_path: Path) -> Callable[..., Path]:
+    """Write an experiment config under ``tmp_path/project/configs`` and return its path.
+
+    Keyword arguments replace whole top-level entries (``strategy={"fast": 3, "slow": 9}``);
+    ``drop`` removes top-level keys. Unless ``prefill=False``, the data cache is
+    filled first from a fake downloader serving ``prices`` (default: a seeded
+    random walk), so running the experiment never touches the network.
+    """
+
+    def _make(
+        *, prices: pd.DataFrame | None = None, prefill: bool = True, drop: tuple = (), **overrides
+    ) -> Path:
+        import yaml
+
+        config = {**BASE_CONFIG, **overrides}
+        for key in drop:
+            config.pop(key)
+        folder = tmp_path / "project" / "configs"
+        folder.mkdir(parents=True, exist_ok=True)
+        path = folder / f"{config.get('name', 'unnamed')}.yaml"
+        path.write_text(yaml.safe_dump(config, sort_keys=False))
+        if prefill:
+            data = config["data"]
+            frame = prices if prices is not None else make_ohlcv(seed=4, start_price=300.0)
+            loader = YFinanceLoader(
+                folder / data["cache_dir"], downloader=FakeDownloader({data["symbol"]: frame})
+            )
+            loader.load([data["symbol"]], data["start"], data["end"])
+        return path
+
+    return _make

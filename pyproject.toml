@@ -4,9 +4,11 @@ version = "0.1.0"
 description = "A lookahead-safe daily backtester for classical and ML trading strategies."
 requires-python = ">=3.11"
 dependencies = [
+    "matplotlib>=3.8",
     "numpy>=1.26",
     "pandas>=2.2",
     "pyarrow>=15",
+    "pyyaml>=6.0",
     "yfinance>=0.2.54",
 ]
 
@@ -14,6 +16,11 @@ dependencies = [
 dev = [
     "pytest>=8",
     "ruff>=0.6",
+]
+notebook = [
+    "ipykernel>=6",
+    "jupyterlab>=4",
+    "nbclient>=0.9",
 ]
 
 [build-system]
