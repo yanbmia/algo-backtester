@@ -10,7 +10,7 @@ Cache policy:
 
 - **Hit**: metadata exists, was written with the same settings, and its
   *requested* range covers the new request. The parquet must still match the
-  checksum recorded at download time, or loading fails loudly.
+  checksum recorded at download time, or loading raises an error.
 - **Miss**: download, validate, then write. An invalid download is never cached.
 - **Range extension**: a request outside the cached range re-downloads the union
   of the old and new ranges and replaces the cache. Downloads are never merged,
@@ -76,9 +76,7 @@ class CacheIntegrityError(RuntimeError):
     """A cache file is unreadable, or no longer matches its recorded checksum."""
 
 
-# ---------------------------------------------------------------------------
 # yfinance adapter
-# ---------------------------------------------------------------------------
 
 
 def yfinance_download(symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
@@ -162,9 +160,7 @@ def normalize_yfinance_frame(raw: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return df
 
 
-# ---------------------------------------------------------------------------
 # Loader
-# ---------------------------------------------------------------------------
 
 
 class YFinanceLoader:
@@ -211,8 +207,7 @@ class YFinanceLoader:
         stem = f"{symbol}_{INTERVAL}"
         return self.cache_dir / f"{stem}.parquet", self.cache_dir / f"{stem}.meta.json"
 
-    # --- internals -------------------------------------------------------------
-
+    # Internals
     def _load_symbol(self, symbol: str, start: pd.Timestamp, end: pd.Timestamp) -> pd.DataFrame:
         parquet_path, meta_path = self.cache_paths(symbol)
         meta = None if self.refresh else self._read_meta(symbol, meta_path, parquet_path)
@@ -375,9 +370,7 @@ class YFinanceLoader:
         logger.info("%s: cached %d rows to %s", symbol, len(frame), parquet_path)
 
 
-# ---------------------------------------------------------------------------
 # Helpers
-# ---------------------------------------------------------------------------
 
 
 def _check_symbols(symbols: Sequence[str]) -> list[str]:

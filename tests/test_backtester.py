@@ -36,9 +36,7 @@ def gapped() -> MarketData:
     return MarketData.from_frames({"GAP": make_gapped_ohlcv(30)})
 
 
-# ---------------------------------------------------------------------------
 # Setup
-# ---------------------------------------------------------------------------
 
 
 class TestSetup:
@@ -79,9 +77,7 @@ class TestSetup:
             run(market_data, EqualWeight(), start="2020-06-01", end="2020-05-01")
 
 
-# ---------------------------------------------------------------------------
 # Execution timing
-# ---------------------------------------------------------------------------
 
 
 class TestTiming:
@@ -138,9 +134,7 @@ class TestTiming:
         assert result.equity.index[-1] == end
 
 
-# ---------------------------------------------------------------------------
 # Accounting identities
-# ---------------------------------------------------------------------------
 
 
 class TestAccounting:
@@ -192,9 +186,7 @@ class TestAccounting:
             run(market_data, Constant({"AAA": 1.0}), execution=NextOpenExecution(BpsCost(10)))
 
 
-# ---------------------------------------------------------------------------
 # Warmup
-# ---------------------------------------------------------------------------
 
 
 class TestWarmup:
@@ -257,9 +249,7 @@ class TestWarmup:
         assert isinstance(info.value.__cause__, RuntimeError)
 
 
-# ---------------------------------------------------------------------------
 # Weight validation
-# ---------------------------------------------------------------------------
 
 INVALID_OUTPUTS = {
     "negative": ({"AAA": -0.1}, "AAA: weight -0.1 is negative"),
@@ -314,9 +304,7 @@ class TestWeightValidation:
         assert result.decisions.iloc[0].tolist() == [0.25, 0.0, 0.5]
 
 
-# ---------------------------------------------------------------------------
 # Calendars
-# ---------------------------------------------------------------------------
 
 
 class TestCalendars:
@@ -333,9 +321,7 @@ class TestCalendars:
         assert (result.positions["LATE"] == 0).all()  # lists after the run ends
 
 
-# ---------------------------------------------------------------------------
 # Result
-# ---------------------------------------------------------------------------
 
 
 class TestResult:

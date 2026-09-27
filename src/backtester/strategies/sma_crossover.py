@@ -17,13 +17,13 @@ class SMACrossover(Strategy):
     - slow mean = mean of all ``slow`` of them
     - weight = 1.0 if fast mean > slow mean, else 0.0
 
-    **Ties are flat.** When the two means are exactly equal, the signal "fast
+    Ties are flat. When the two means are exactly equal, the signal "fast
     above slow" is not true, so the strategy holds no position. That includes a
     tie right after being long: the rule is stateless and never looks at its
     previous decision. Means are compared exactly, with no tolerance, and are
     computed with ``math.fsum`` so that equal sums give equal means (with
     integer or other exactly representable prices, a mathematical tie is an
-    exact tie). For real, noisy prices an exact tie is vanishingly rare.
+    exact tie). On real prices an exact tie is very unlikely.
 
     ``warmup`` is ``slow``, so the first decision comes once ``slow`` bars are
     visible. The symbol must trade from the start of the data; if it has fewer

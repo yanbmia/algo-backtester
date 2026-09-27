@@ -15,9 +15,7 @@ def _date(frame: pd.DataFrame, row: int = BAD_ROW) -> str:
     return frame.index[row].strftime("%Y-%m-%d")
 
 
-# ---------------------------------------------------------------------------
 # Construction
-# ---------------------------------------------------------------------------
 
 
 class TestConstruction:
@@ -71,9 +69,7 @@ class TestConstruction:
         assert list(md.frame("AAA").columns) == ["open", "high", "low", "close", "volume"]
 
 
-# ---------------------------------------------------------------------------
 # Accessors
-# ---------------------------------------------------------------------------
 
 
 class TestAccessors:
@@ -137,9 +133,7 @@ class TestAccessors:
         assert repr(md) == expected
 
 
-# ---------------------------------------------------------------------------
 # Validation: one test per rule (parametrized over the cases in synthetic.py)
-# ---------------------------------------------------------------------------
 
 
 class TestValidationRules:

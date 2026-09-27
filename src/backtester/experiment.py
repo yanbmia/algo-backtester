@@ -76,9 +76,7 @@ class BacktestError(ExperimentError):
     """The engine rejected the run (e.g. too little data for the strategy's warmup)."""
 
 
-# ---------------------------------------------------------------------------
 # Config
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -224,9 +222,7 @@ def _as_date(value: object) -> object:
     raise TypeError(f"dates must look like 2024-12-31, got {value!r}")
 
 
-# ---------------------------------------------------------------------------
 # Running
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -314,9 +310,7 @@ def run_experiment(
     return Experiment(config, data, runs[0], runs[1], provenance)
 
 
-# ---------------------------------------------------------------------------
 # Outputs
-# ---------------------------------------------------------------------------
 
 _PERCENT = ("total_return", "cagr", "annualized_vol", "max_drawdown", "exposure")
 _DATES = ("start", "end", "max_drawdown_peak", "max_drawdown_trough")

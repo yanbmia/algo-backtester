@@ -18,9 +18,7 @@ def run(data, strategy, **window):
     return engine.run(**window)
 
 
-# ---------------------------------------------------------------------------
 # SMACrossover on a series engineered to cross on known dates
-# ---------------------------------------------------------------------------
 
 # fast = 3, slow = 6. Every mean below is an exact integer, so ties are exact.
 #
@@ -127,9 +125,7 @@ class TestSMACrossover:
             SMACrossover(["XYZ"])  # type: ignore[arg-type]
 
 
-# ---------------------------------------------------------------------------
 # BuyAndHold
-# ---------------------------------------------------------------------------
 
 
 class TestBuyAndHold:

@@ -43,9 +43,7 @@ def _expected(frame: pd.DataFrame, start: pd.Timestamp, end: pd.Timestamp) -> pd
     return expected
 
 
-# ---------------------------------------------------------------------------
 # Cache miss
-# ---------------------------------------------------------------------------
 
 
 class TestCacheMiss:
@@ -119,9 +117,7 @@ class TestCacheMiss:
         pd.testing.assert_frame_equal(cached, md.frame("AAA"), check_freq=False)
 
 
-# ---------------------------------------------------------------------------
 # Cache hit
-# ---------------------------------------------------------------------------
 
 
 class TestCacheHit:
@@ -171,9 +167,7 @@ class TestCacheHit:
         assert len(fake_downloader.calls_for("BBB")) == 1
 
 
-# ---------------------------------------------------------------------------
 # Refresh, range extension, stale caches
-# ---------------------------------------------------------------------------
 
 
 class TestCacheInvalidation:
@@ -231,13 +225,11 @@ class TestCacheInvalidation:
         assert len(fake_downloader.calls) == 2
 
 
-# ---------------------------------------------------------------------------
 # Cache integrity
-# ---------------------------------------------------------------------------
 
 
 class TestCacheIntegrity:
-    def test_modified_parquet_fails_loudly(self, make_loader):
+    def test_modified_parquet_raises_checksum_error(self, make_loader):
         loader = make_loader()
         loader.load(["AAA"], START, END)
         parquet_path, _ = loader.cache_paths("AAA")
@@ -248,7 +240,7 @@ class TestCacheIntegrity:
         with pytest.raises(CacheIntegrityError, match=r"checksum.*refresh=True"):
             make_loader().load(["AAA"], START, END)
 
-    def test_unreadable_meta_fails_loudly(self, make_loader):
+    def test_unreadable_meta_raises_integrity_error(self, make_loader):
         loader = make_loader()
         loader.load(["AAA"], START, END)
         loader.cache_paths("AAA")[1].write_text("{not json")
@@ -268,9 +260,7 @@ class TestCacheIntegrity:
         )
 
 
-# ---------------------------------------------------------------------------
 # Rejecting bad data from the source
-# ---------------------------------------------------------------------------
 
 
 class TestRejectsBadDownloads:
@@ -339,9 +329,7 @@ class TestRejectsBadDownloads:
             make_loader().load(["AAA"], "2020-02-01", "2020-02-02")  # a weekend
 
 
-# ---------------------------------------------------------------------------
 # yfinance response shapes
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("multi_level", [True, False], ids=["multiindex", "flat"])
@@ -385,9 +373,7 @@ def test_yfinance_adapter_raises_on_an_empty_response(monkeypatch):
         yfinance_download("SPY", pd.Timestamp("2020-01-02"), pd.Timestamp("2020-01-31"))
 
 
-# ---------------------------------------------------------------------------
 # Input validation (fails before any download)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -427,9 +413,7 @@ def test_yfinance_loader_satisfies_the_dataloader_protocol(cache_dir):
     assert isinstance(YFinanceLoader(cache_dir), DataLoader)
 
 
-# ---------------------------------------------------------------------------
 # Live data (opt-in)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.network

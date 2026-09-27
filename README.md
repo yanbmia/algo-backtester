@@ -1,6 +1,6 @@
 # algo-backtester
 
-A daily backtester in Python, used to test a 50/200-day moving-average crossover against buy-and-hold on SPY from 2004 to 2024.
+A daily backtester I built from scratch in Python, then used to ask one old question: does a 50/200-day moving-average crossover beat simply holding SPY? Over 2004 to 2024, the answer was no, and the reasons why turned out to be the interesting part.
 
 [![CI](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml/badge.svg)](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml)
 
@@ -25,7 +25,11 @@ Source: [`reports/sma_spy_comparison.csv`](reports/sma_spy_comparison.csv), roun
 
 ## Why this project
 
-Backtests are easy to get subtly wrong, and almost every mistake (using a price before it was knowable, trading at the same close that produced the signal, comparing strategies over different windows) makes results look better, not worse. None of them raise an error; they just produce a nicer number. This project puts correctness first: the engine is built so those mistakes are structurally hard to make, the tests try to catch them anyway, and the headline result is reported as it came out.
+I started this project because I wanted to test ML trading signals eventually, and I realized I couldn't trust any result until I trusted the thing producing it.
+
+Backtests are easy to get subtly wrong, and almost every mistake (using a price before it was knowable, trading at the same close that produced the signal, comparing strategies over different windows) makes results look better, not worse. None of them raise an error. They just produce a nicer number, which is exactly the kind of bug nobody goes looking for.
+
+So I put correctness first. The engine is built so those mistakes are structurally hard to make, the tests try to catch them anyway, and the headline result is reported as it came out, even though it isn't flattering to the strategy.
 
 ## Approach
 
@@ -66,7 +70,9 @@ The benchmark, `BuyAndHold`, runs through the same engine with the same executio
 
 **When it was in the market** ([positions chart](reports/figures/sma_spy_positions.png)). The shaded bands mark when the crossover held SPY (19 fills in all). The 20.9% of days in cash is the whole trade-off: it is why the drawdowns are shallower and also why the return is lower. Cash earns nothing in this backtest, and a crossover only re-enters after a recovery is already under way.
 
-**Reading it plainly:** on SPY over this period, the 50/200 crossover did not beat buy-and-hold. It traded about 1.5 points of annual return for a smoother ride, and that is before costs, which would widen the gap (see [Scope and limitations](#scope-and-limitations)). It is a transparent baseline, not a trading edge.
+**Reading it plainly:** on SPY over this period, the 50/200 crossover did not beat buy-and-hold. It traded about 1.5 points of annual return for a smoother ride, and that is before costs, which would widen the gap (see [Scope and limitations](#scope-and-limitations)).
+
+Whether that trade is worth it depends on who's holding the portfolio. Sitting through a -55% drawdown on paper is easy; sitting through it with real money is a different test, and a lot of people sell near the bottom. The crossover caps the pain at a cost of about 1.5 points a year. I don't think the backtest can settle that question, but it does put a number on it. What it is not is a trading edge. It's a transparent baseline for whatever comes next.
 
 The window alignment doesn't flatter the crossover. Measured from its own first day (2004-01-02), buy-and-hold's CAGR is 10.3% ([`reports/sma_spy_standalone.csv`](reports/sma_spy_standalone.csv)); over the aligned window it is 10.6%.
 
@@ -74,7 +80,7 @@ The window alignment doesn't flatter the crossover. Measured from its own first 
 
 Strategies never see the dataset: at each close *t* the engine calls `MarketData.view(t)`, and the `MarketView` it passes to the strategy returns only bars dated at or before *t*, as read-only copies, through methods that don't accept a date. That boundary is computed in exactly one place, `MarketData._visible_rows` (`searchsorted(cutoff, side="right")`), so an off-by-one has one place to live and one place to test. Separately, the engine holds each decision overnight and fills it at the next bar's open, so even a correctly truncated signal can never trade at the close it was computed from.
 
-That structure makes leaks hard to write by accident. The tests check from the outside that none got through (all in [`tests/test_lookahead.py`](tests/test_lookahead.py) unless noted):
+That structure makes leaks hard to write by accident, but "hard to write" isn't the same as "absent," so the tests check from the outside that none got through (all in [`tests/test_lookahead.py`](tests/test_lookahead.py) unless noted):
 
 - **Future perturbation.** `TestFuturePerturbation::test_nothing_at_or_before_the_cutoff_depends_on_the_future` rewrites every bar after a cutoff *T* with an unrelated random walk, reruns the full engine, and requires decisions, equity, cash, positions, and fills through *T* to be bit-for-bit identical. It covers 5 strategies × 3 cutoffs × 2 datasets, one of them with symbols that list and delist mid-run. `test_perturbation_shows_up_on_the_very_next_bar` checks the other side: the probe strategy's output does change at *T*+1, so passing can't be explained by insensitivity.
 - **Negative control.** `LeakyMarketData` ([`tests/lookahead_harness.py`](tests/lookahead_harness.py)) reproduces the classic off-by-one: each view shows one extra bar while still reporting the correct date. The same check must fail against it (`TestNegativeControl::test_perturbation_check_fails_against_a_leaky_view`), and the first changed decision must move from *T*+1 to *T* (`test_leak_changes_the_decision_at_the_cutoff_itself`).
@@ -85,7 +91,7 @@ The full write-up, including what these tests cannot catch, is in [`docs/methodo
 
 ## Scope and limitations
 
-v1 establishes a tested, lookahead-safe engine and a transparent baseline. It does not claim a tradable edge. Each limitation names the interface where the extension goes.
+v1 establishes a tested, lookahead-safe engine and a transparent baseline. It does not claim a tradable edge. I'd rather state the gaps precisely than leave them for a reader to find, so each limitation below names its consequence and the interface where the fix would go.
 
 - **Gross of costs.** A `CostModel` interface exists in `engine/execution.py`; v1 passes `NextOpenExecution(ZeroCost())` explicitly (`Backtester` has no default execution model, and the config accepts only `costs: zero`). For scale: the crossover made **19 fills** in the comparison window, each moving the whole portfolio into or out of SPY. At 5 bps per side that's roughly 19 × 0.05% ≈ 0.95% of cumulative drag, or about 0.05 percentage points of CAGR. Buy-and-hold pays it once (1 fill in the standalone table). That is small next to the 1.5-point gap, and it widens the gap rather than closing it. One catch for whoever adds costs: v1 sizes orders before costs, so a non-zero cost model with a 100% target overdraws the account and the engine stops with `EngineError` (`test_a_cost_that_overdraws_a_fully_invested_account_is_an_error`). Cost-aware sizing belongs in `Portfolio.orders_for`.
 - **Fills at the open, with no slippage or market impact.** Fill rules sit behind the `ExecutionModel` protocol (`reference_prices`, `execute`) in `engine/execution.py`.
@@ -152,6 +158,8 @@ pytest                                                # offline suite
 
 ## Design notes
 
+A few decisions I made on purpose, and why:
+
 - **An event loop, not a vectorized engine.** Vectorized pandas (`signal.shift(1) * returns`) is shorter and faster, but its lookahead safety depends on remembering the `shift`. The bar-by-bar loop makes the guard structural (view truncation plus next-open fills), and it is the natural home for costs, multi-asset rebalancing, and model refits. Speed is irrelevant at a few thousand daily bars.
 - **Strategies return target weights, not signals or orders.** A `{symbol: weight}` dict keeps strategies about *what* to hold and the engine about *how* to get there. It extends to many assets and to model-driven sizing without changing the contract, and costs live in one place.
-- **No existing backtesting library.** Building the engine is the point of the project. Owning the timing convention end to end is also what makes it testable at the level `tests/test_lookahead.py` tests it.
+- **No existing backtesting library.** Building the engine is the point of the project. I wanted to understand every step between a price and a fill, not configure someone else's. Owning the timing convention end to end is also what makes it testable at the level `tests/test_lookahead.py` tests it.

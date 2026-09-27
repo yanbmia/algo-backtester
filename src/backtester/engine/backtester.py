@@ -160,8 +160,7 @@ class Backtester:
             run_dates, equity, cash, positions, decision_dates, decision_rows, fills, first_decision
         )
 
-    # --- steps ---------------------------------------------------------------
-
+    # Steps
     def _execute(
         self,
         portfolio: Portfolio,
@@ -210,8 +209,7 @@ class Backtester:
                 date=t,
             ) from exc
 
-    # --- setup checks ----------------------------------------------------------
-
+    # Setup checks
     def _run_dates(self, start: object, end: object) -> pd.DatetimeIndex:
         calendar = self._data.calendar
         lo = calendar[0] if start is None else _as_date(start, "start")
@@ -261,8 +259,7 @@ class Backtester:
             )
         return run_dates[ready[0]]
 
-    # --- output --------------------------------------------------------------
-
+    # Output
     def _result(
         self,
         run_dates: pd.DatetimeIndex,

@@ -77,9 +77,7 @@ def scenario(request, market_data, staggered_market_data) -> Scenario:
     return Scenario(staggered_market_data, end=pd.Timestamp("2020-07-31"))
 
 
-# ---------------------------------------------------------------------------
 # 1. Future-perturbation invariance
-# ---------------------------------------------------------------------------
 
 
 class TestFuturePerturbation:
@@ -151,9 +149,7 @@ class TestFuturePerturbation:
         assert seen_with == seen_without
 
 
-# ---------------------------------------------------------------------------
 # 2. Negative control: a leaky view must make the checks fail
-# ---------------------------------------------------------------------------
 
 
 class TestNegativeControl:
@@ -205,9 +201,7 @@ class TestNegativeControl:
         assert len(leaky_view.history("AAA")) == len(honest_view.history("AAA")) + 1
 
 
-# ---------------------------------------------------------------------------
 # 3. Boundary: the latest visible bar is dated now (or earlier)
-# ---------------------------------------------------------------------------
 
 
 def assert_seen_only_up_to_now(data: MarketData, observations: list[Observation]) -> None:
@@ -257,9 +251,7 @@ class TestBoundary:
                     assert history.iloc[-1] == getattr(bar, field)
 
 
-# ---------------------------------------------------------------------------
 # 4. Read-only: returned data cannot be written or reach the parent
-# ---------------------------------------------------------------------------
 
 SERIES_WRITES = {
     "setitem": lambda s: s.__setitem__(s.index[-1], 0.0),
@@ -345,9 +337,7 @@ class TestReadOnly:
         pd.testing.assert_frame_equal(market_data.frame("AAA"), expected_frame)
 
 
-# ---------------------------------------------------------------------------
 # Real data (opt-in: needs network access to Yahoo)
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.network

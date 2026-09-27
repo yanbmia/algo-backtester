@@ -4,8 +4,8 @@ A strategy never receives ``MarketData``. At each step the engine calls
 ``MarketData.view(t)`` and passes the strategy the resulting ``MarketView``,
 which can only return bars dated at or before ``t``.
 
-Boundary semantics (the lookahead guarantee depends on exactly this)
---------------------------------------------------------------------
+Boundary semantics
+------------------
 For cutoff ``T`` and a symbol whose sorted, unique dates are
 ``d_0 < d_1 < ... < d_{m-1}``, the visible rows are positions ``[0, n)`` where::
 
@@ -19,8 +19,8 @@ that throws away the latest close). Anything that admits a row with ``d_i > T``
 is lookahead. The count is computed in exactly one place,
 ``MarketData._visible_rows``.
 
-Other guarantees
-----------------
+Other rules
+-----------
 - ``cutoff`` must be a date on the parent's calendar, so ``now`` is always a
   real trading date.
 - ``symbols`` lists only symbols with at least one visible bar. A symbol that
@@ -157,7 +157,7 @@ class MarketView:
         date_arr, code_arr = np.concatenate(dates), np.concatenate(codes)
         order = np.lexsort((code_arr, date_arr))  # primary key: date; secondary: symbol
         unique_dates, date_codes = np.unique(date_arr[order], return_inverse=True)
-        row_index = pd.MultiIndex(  # built from codes directly: far faster than from_arrays
+        row_index = pd.MultiIndex(  # built from codes directly; much faster than from_arrays
             levels=[pd.DatetimeIndex(unique_dates), pd.Index(symbols)],
             codes=[date_codes.ravel(), code_arr[order]],
             names=["date", "symbol"],
@@ -170,8 +170,7 @@ class MarketView:
             copy=False,
         )
 
-    # --- internals -----------------------------------------------------------
-
+    # Internals
     def _window(self, symbol: str) -> Window:
         try:
             return self._windows[symbol]

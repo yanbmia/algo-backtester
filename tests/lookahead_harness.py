@@ -30,9 +30,7 @@ from backtester.results import BacktestResult
 from backtester.strategies import Strategy
 from synthetic import replace_after
 
-# ---------------------------------------------------------------------------
 # Strategies built to expose leaks
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -125,9 +123,7 @@ class MomentumStrategy(Strategy):
         return weights
 
 
-# ---------------------------------------------------------------------------
 # Negative control
-# ---------------------------------------------------------------------------
 
 
 class LeakyMarketData(MarketData):
@@ -150,9 +146,7 @@ def make_leaky(data: MarketData) -> LeakyMarketData:
     return LeakyMarketData.from_frames({s: data.frame(s) for s in data.symbols})
 
 
-# ---------------------------------------------------------------------------
 # Harness
-# ---------------------------------------------------------------------------
 
 
 def run_backtest(

@@ -173,9 +173,7 @@ class FakeDownloader:
         return [c for c in self.calls if c[0] == symbol]
 
 
-# ---------------------------------------------------------------------------
 # Invalid-frame cases: each breaks exactly one rule
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)

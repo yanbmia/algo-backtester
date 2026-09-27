@@ -3,7 +3,7 @@
 ``MarketData`` holds the complete (date, symbol) panel. Only the backtest engine
 should ever hold one: strategies receive a truncated, point-in-time
 :class:`~backtester.data.view.MarketView` from :meth:`MarketData.view`, which is
-what makes lookahead structurally hard.
+how the engine keeps future data away from strategies.
 
 The only supported constructor is :meth:`MarketData.from_frames`. It validates
 every input frame and raises :class:`DataValidationError` listing *every* broken
@@ -33,7 +33,7 @@ PRICE_COLUMNS: tuple[str, ...] = ("open", "high", "low", "close")
 #: Relative tolerance for the high/low bound checks. It exists only to absorb
 #: floating-point rounding from yfinance's auto-adjustment (which multiplies all
 #: four prices by the same factor, so errors are ~1e-16 relative). It is far too
-#: small to hide a genuinely bad bar: a one-cent error on a $100 stock is 1e-4.
+#: small to hide a bad bar: a one-cent error on a $100 stock is 1e-4.
 BOUND_RTOL: float = 1e-9
 
 #: How many offending rows to quote in an error message per violation.
@@ -122,9 +122,7 @@ class DataValidationError(ValueError):
         return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Validation
-# ---------------------------------------------------------------------------
 
 
 def validate_frame(symbol: str, frame: pd.DataFrame) -> list[Violation]:
@@ -234,7 +232,7 @@ def _value_violations(symbol: str, frame: pd.DataFrame) -> list[Violation]:
             examples=tuple(_describe_row(index[p], values[p]) for p in positions[:MAX_EXAMPLES]),
         )
 
-    # --- dates -----------------------------------------------------------
+    # Dates
     dup_mask = index.duplicated(keep=False)
     if dup_mask.any():
         counts = pd.Series(index[dup_mask]).value_counts(sort=False)
@@ -265,7 +263,7 @@ def _value_violations(symbol: str, frame: pd.DataFrame) -> list[Violation]:
             )
         )
 
-    # --- finiteness (NaN / inf) --------------------------------------------
+    # Finiteness (NaN / inf)
     for j, column in enumerate(OHLCV_COLUMNS):
         bad = ~np.isfinite(values[:, j])
         if bad.any():
@@ -336,9 +334,7 @@ def _describe_row(ts: pd.Timestamp, row: np.ndarray) -> str:
     return f"{_fmt(ts)} ({fields})"
 
 
-# ---------------------------------------------------------------------------
 # Container
-# ---------------------------------------------------------------------------
 
 _FROM_FRAMES = object()  # construction key: only from_frames may call __init__
 
@@ -398,8 +394,7 @@ class MarketData:
 
         return cls({s: canonicalize_frame(f) for s, f in frames.items()}, _key=_FROM_FRAMES)
 
-    # --- accessors -----------------------------------------------------------
-
+    # Accessors
     @property
     def symbols(self) -> tuple[str, ...]:
         return self._symbols

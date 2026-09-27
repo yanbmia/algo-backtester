@@ -97,9 +97,7 @@ def structural_case(request: pytest.FixtureRequest) -> InvalidCase:
     return request.param
 
 
-# ---------------------------------------------------------------------------
 # Experiments (config file + pre-filled data cache, no network)
-# ---------------------------------------------------------------------------
 
 #: A small experiment: SMA(5, 20) on a year of synthetic "SPY", $100k, no costs.
 BASE_CONFIG: dict = {

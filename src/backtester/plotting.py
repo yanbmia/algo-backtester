@@ -4,14 +4,8 @@ Figures are created with ``matplotlib.figure.Figure`` directly, never through
 ``pyplot``, so no window, GUI backend, or global plotting state is involved.
 The same code runs headless in CI, from the script, or inside a notebook.
 
-Styling follows one small, validated palette:
-
-- The strategy is always categorical slot 1 (blue) and the benchmark slot 2
-  (orange). The pair passes colorblind-separation and contrast checks on the
-  light surface, and every chart also names each line in a legend and at its
-  end, so color is never the only cue.
-- Lines are thin; gridlines are solid hairlines; text is never drawn in a
-  series color.
+The strategy is always blue and the benchmark orange. Each line is also
+labeled in the legend and at its end, so the charts don't rely on color alone.
 
 Functions take plain pandas objects (``metrics.rebased_equity`` output, a
 ``BacktestResult``, a price series) and return the ``Figure`` after saving it.
@@ -41,14 +35,14 @@ from matplotlib.ticker import (
 from backtester.metrics import drawdown_series, exposure
 from backtester.results import BacktestResult
 
-# Light-surface tokens (reference palette, validated for these two series).
+# Chart colors.
 SURFACE = "#fcfcfb"
 TEXT = "#0b0b0b"
 TEXT_SECONDARY = "#52514e"
 MUTED = "#898781"
 GRID = "#e1e0d9"
 BASELINE = "#c3c2b7"
-SERIES = ("#2a78d6", "#eb6834")  # strategy, benchmark: fixed order, never cycled
+SERIES = ("#2a78d6", "#eb6834")  # strategy, benchmark
 
 FIGSIZE = (10.0, 5.4)
 DPI = 200
@@ -154,9 +148,7 @@ def plot_positions(
     return _save(fig, path)
 
 
-# --- building blocks ----------------------------------------------------------
-
-
+# Building blocks
 def _figure(title: str, subtitle: str, right_margin: float = 0.97) -> tuple[Figure, Axes]:
     fig = Figure(figsize=FIGSIZE, dpi=DPI, facecolor=SURFACE)
     ax = fig.add_axes((0.08, 0.11, right_margin - 0.08, 0.69))
@@ -234,11 +226,11 @@ def _line(
             marker="o",
             markersize=5.5,
             markerfacecolor=color,
-            markeredgecolor=SURFACE,  # surface ring keeps the dot legible over lines
+            markeredgecolor=SURFACE,  # light edge so the dot stands out over the lines
             markeredgewidth=1.2,
             linestyle="none",
             zorder=zorder + 0.5,
-            clip_on=False,  # the last point sits on the axis edge; show the whole dot
+            clip_on=False,  # the last point is on the axis edge; don't clip it
         )
     return line
 

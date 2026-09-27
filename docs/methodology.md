@@ -1,16 +1,16 @@
 # Methodology: preventing lookahead bias
 
-This is the full account of how the backtester keeps future information out of past decisions, and how the test suite checks that it does. Every mechanism and test is named by file so it can be verified directly. The short version is in the README's [Rigor](../README.md#rigor-preventing-lookahead-bias) section.
+This document explains how the backtester keeps future information out of past decisions, and how the test suite checks that it does. Every mechanism and test is named by file so it can be verified directly. The short version is in the README's [Rigor](../README.md#rigor-preventing-lookahead-bias) section.
 
 ## 1. Why lookahead bias matters
 
-A backtest replays history and asks what a strategy would have done. The answer only means something if each simulated decision uses information that existed when the decision was made. Lookahead bias is any leak of later information into an earlier decision, and three things make it worth designing against rather than just trying to be careful:
+A backtest replays history and asks what a strategy would have done. The answer only means something if each simulated decision uses information that existed when the decision was made. Lookahead bias is any leak of later information into an earlier decision, and I designed against it instead of relying on being careful, for three reasons:
 
-- **It flatters.** Knowing tomorrow is the best trading signal there is, so a leak almost always improves results. The error pushes in the direction you were hoping for, which makes it easy to accept.
+- **It flatters.** Knowing tomorrow is the best trading signal there is, so a leak almost always improves results. The error goes in the direction you were hoping for, so it's easy to accept.
 - **It is silent.** Nothing crashes. A leaky backtest produces a plausible equity curve, just a better one than the strategy deserves.
 - **It is small in code.** The usual causes are one-token mistakes: `<=` where `<` was needed, a forgotten `.shift(1)`, deciding and filling on the same close, normalizing with full-sample statistics, or letting a strategy know which tickers will exist later.
 
-On daily bars, even a one-bar leak is severe: a strategy that can see tomorrow's close can be long on up days and flat on down days. Because the bug is small, silent, and flattering, v1 relies on structure to make it hard to write and on outside tests to catch it anyway.
+On daily bars, even a one-bar leak is severe: a strategy that can see tomorrow's close can be long on up days and flat on down days. So v1 makes the bug hard to write in the first place, then tests for it from the outside anyway.
 
 ## 2. The timing convention
 
@@ -53,7 +53,7 @@ The two parts protect different things. Truncation controls what a strategy can 
 
 Python has no enforced privacy, so this design makes leakage hard to do by accident but cannot make it impossible on purpose. A concrete example: the arrays inside a `MarketView` are NumPy slices of the parent's arrays. The view holds no reference to the `MarketData` object itself (`test_view_holds_no_reference_to_its_parent` in `tests/test_view.py`), but a slice's `.base` attribute leads straight back to the full, untruncated data. A strategy that reached into `view._windows` and followed `.base` would see the entire future, and nothing in the language would stop it. Walking the call stack up to the engine's frame, which holds the full dataset, would work too.
 
-So the guarantee cannot rest on encapsulation. It rests on a test that does not care *how* a strategy reads data, only whether its outputs depend on data it should not have.
+So I don't rely on encapsulation. The check that matters is a test that doesn't care how a strategy reads data, only whether its outputs depend on data it shouldn't have.
 
 ## 6. Testing from the outside: future perturbation
 
@@ -80,21 +80,21 @@ The property being tested: if nothing the engine produces through date *T* depen
 
 **Why decisions and not just equity.** A one-bar leak changes the decision made at *T*, but that decision trades at *T*+1's open, and *T*+1 is perturbed anyway. The leaky run's equity therefore first diverges at *T*+1, exactly where an honest run's does. `test_equity_alone_cannot_see_a_one_bar_leak` demonstrates this, which is why `assert_no_lookahead` compares decisions first.
 
-**The limits of the test, stated plainly.**
+**Limits of the test.**
 
 - It detects dependence on the data the engine was given. A strategy that read the future from somewhere else, such as the Parquet cache on disk or the network, would see the same future in both runs and pass. v1's strategies are short and read nothing but their view, which can be confirmed by reading `src/backtester/strategies/`.
 - It only checks the strategies it runs. A new strategy gets checked by adding one line to `STRATEGIES` in `tests/test_lookahead.py`.
 
 ## 7. The negative control
 
-A test that cannot fail proves nothing. The harness is code too: it could compare a frame with itself, slice the wrong dates, or perturb nothing, and every lookahead test would still pass. So the suite includes a deliberately broken dataset and requires the checks to catch it.
+The harness is code too, and it can be wrong: it could compare a frame with itself, slice the wrong dates, or perturb nothing, and every lookahead test would still pass. So the suite includes a deliberately broken dataset and requires the checks to catch it.
 
-`LeakyMarketData` in `tests/lookahead_harness.py` subclasses `MarketData` and overrides only `_visible_rows`, returning one extra row: the classic off-by-one. Everything else is the real implementation. Its views report the correct `now` and the correct symbols, and only their contents are wrong (`test_the_leak_is_subtle`). That is the smallest realistic leak and the hardest to spot by eye. `replace_after` rebuilds data with `type(data).from_frames`, so the leaky subclass survives perturbation instead of quietly turning honest.
+`LeakyMarketData` in `tests/lookahead_harness.py` subclasses `MarketData` and overrides only `_visible_rows`, returning one extra row: the classic off-by-one. Everything else is the real implementation. Its views report the correct `now` and the correct symbols, and only their contents are wrong (`test_the_leak_is_subtle`). It's the smallest realistic leak, and the hardest to spot by looking at results. `replace_after` rebuilds data with `type(data).from_frames`, so the perturbed data keeps the leak.
 
 The control tests, in `tests/test_lookahead.py`:
 
 - `TestNegativeControl::test_perturbation_check_fails_against_a_leaky_view`: `assert_no_lookahead` must raise an `AssertionError` about decisions, for both probes at all three cutoffs.
-- `TestNegativeControl::test_leak_changes_the_decision_at_the_cutoff_itself`: with the leak, the first changed decision moves from *T*+1 to *T*. The test locates the leak, not just some difference.
+- `TestNegativeControl::test_leak_changes_the_decision_at_the_cutoff_itself`: with the leak, the first changed decision moves from *T*+1 to *T*. So the test finds where the leak is, not just that something changed.
 - `TestBoundary::test_boundary_check_fails_against_a_leaky_view`: the boundary check in the next section fails on leaky data as well.
 
 ## 8. Other checks

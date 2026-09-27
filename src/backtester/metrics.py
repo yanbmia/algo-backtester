@@ -4,8 +4,8 @@ Nothing here imports the engine. Every function takes plain pandas objects, so
 the same code scores a single-symbol backtest, a multi-asset portfolio, or a
 series built by hand in a test.
 
-Conventions (stated once, used everywhere)
-------------------------------------------
+Conventions
+-----------
 - **Returns** are simple period returns, ``r_t = E_t / E_{t-1} - 1``.
 - **Time** is counted in periods (trading days), not calendar days. A series
   of ``n`` equity values spans ``n - 1`` periods, which is
@@ -30,8 +30,8 @@ days. Anything that puts strategies side by side (``compare``,
 ``rebased_equity``, and the charts built on them) uses one common window from
 ``comparison_window``, which starts at the *latest* first decision, so a
 benchmark with no warmup is not credited with gains made while the other
-strategy could not yet trade. The alignment lives here, next to the metrics,
-so the script, the notebook, and the charts share one tested rule.
+strategy could not yet trade. The alignment lives here so the script, the
+notebook, and the charts all use the same rule.
 
 Invalid input raises ``ValueError``. The one metric that can be undefined on
 valid input is Sharpe with zero volatility (e.g. a strategy that never
@@ -192,9 +192,7 @@ def summarize(
     )
 
 
-# --- comparing strategies ---------------------------------------------------------
-
-
+# Comparing strategies
 def comparison_window(results: Sequence[BacktestResult]) -> tuple[pd.Timestamp, pd.Timestamp]:
     """The one window every strategy in ``results`` can be judged over.
 
@@ -269,9 +267,7 @@ def rebased_equity(results: Sequence[BacktestResult], base: float = 1.0) -> pd.D
     )
 
 
-# --- input checks ------------------------------------------------------------
-
-
+# Input checks
 def _equity_values(equity: pd.Series, minimum: int) -> np.ndarray:
     if not isinstance(equity, pd.Series):
         raise TypeError(f"equity must be a pandas Series, got {type(equity).__name__}")
