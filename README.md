@@ -1,6 +1,6 @@
 # algo-backtester
 
-A daily backtester I built from scratch in Python, then used to ask one old question: does a 50/200-day moving-average crossover beat simply holding SPY? Over 2004 to 2024, the answer was no, and the reasons why turned out to be the interesting part.
+A daily backtester built in Python, then used to ask one old question: does a 50/200-day moving-average crossover beat simply holding SPY? Over 2004 to 2024, the answer was no. But the reasons are interesting!
 
 [![CI](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml/badge.svg)](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml)
 
