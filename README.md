@@ -1,6 +1,6 @@
 # algo-backtester
 
-A daily backtester built in Python, then used to ask one old question: does a 50/200-day moving-average crossover beat simply holding SPY? Over 2004 to 2024, the answer was no. But the reasons are interesting!
+A daily backtester built in Python, then used to ask: does a 50/200-day moving-average crossover beat simply holding SPY? Over 2004 to 2024, the answer was no. But the reasons are cool!
 
 [![CI](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml/badge.svg)](https://github.com/yanbmia/algo-backtester/actions/workflows/ci.yml)
 
@@ -21,15 +21,15 @@ Before costs, the crossover **trailed buy-and-hold on return** (9.2% vs. 10.6% a
 
 **Comparison window: 2004-10-18 to 2024-12-31** (5,085 daily returns, about 20.2 years), both starting from $100,000, zero costs, next-open fills. The data starts on 2004-01-02, but the window starts on the crossover's first decision date (its 200-day average needs 200 bars of history), so buy-and-hold isn't credited with returns earned while the crossover was still warming up.
 
-Source: [`reports/sma_spy_comparison.csv`](reports/sma_spy_comparison.csv), rounded.
+Source: [`reports/sma_spy_comparison.csv`](reports/sma_spy_comparison.csv) (rounded).
 
 ## Why this project
 
 I started this project because I wanted to test ML trading signals eventually, and I realized I couldn't trust any result until I trusted the thing producing it.
 
-Backtests are easy to get subtly wrong, and almost every mistake (using a price before it was knowable, trading at the same close that produced the signal, comparing strategies over different windows) makes results look better, not worse. None of them raise an error. They just produce a nicer number, which is exactly the kind of bug nobody goes looking for.
+Backtests are easy to get subtly wrong, and almost every mistake (using a price before it was knowable, trading at the same close that produced the signal, comparing strategies over different windows) makes results look better, not worse. None of them raise an error.
 
-So I put correctness first. The engine is built so those mistakes are structurally hard to make, the tests try to catch them anyway, and the headline result is reported as it came out, even though it isn't flattering to the strategy.
+The engine is built so those mistakes are structurally hard to make, the tests try to catch them anyway, and the headline result is reported as it came out, even though it isn't flattering to the strategy.
 
 ## Approach
 
@@ -91,8 +91,6 @@ The full write-up, including what these tests cannot catch, is in [`docs/methodo
 
 ## Scope and limitations
 
-v1 establishes a tested, lookahead-safe engine and a transparent baseline. It does not claim a tradable edge. I'd rather state the gaps precisely than leave them for a reader to find, so each limitation below names its consequence and the interface where the fix would go.
-
 - **Gross of costs.** A `CostModel` interface exists in `engine/execution.py`; v1 passes `NextOpenExecution(ZeroCost())` explicitly (`Backtester` has no default execution model, and the config accepts only `costs: zero`). For scale: the crossover made **19 fills** in the comparison window, each moving the whole portfolio into or out of SPY. At 5 bps per side that's roughly 19 × 0.05% ≈ 0.95% of cumulative drag, or about 0.05 percentage points of CAGR. Buy-and-hold pays it once (1 fill in the standalone table). That is small next to the 1.5-point gap, and it widens the gap rather than closing it. One catch for whoever adds costs: v1 sizes orders before costs, so a non-zero cost model with a 100% target overdraws the account and the engine stops with `EngineError` (`test_a_cost_that_overdraws_a_fully_invested_account_is_an_error`). Cost-aware sizing belongs in `Portfolio.orders_for`.
 - **Fills at the open, with no slippage or market impact.** Fill rules sit behind the `ExecutionModel` protocol (`reference_prices`, `execute`) in `engine/execution.py`.
 - **Single ticker.** `MarketData` is already keyed by (date, symbol), `Portfolio` holds a dict of positions, and strategies return a dict of weights. The engine and the lookahead tests already run on multi-symbol synthetic data with staggered listings.
@@ -104,8 +102,6 @@ v1 establishes a tested, lookahead-safe engine and a transparent baseline. It do
 - **Data source.** yfinance is an unofficial Yahoo Finance client. Prices are split- and dividend-adjusted (`auto_adjust=True`), and adjusted history is recomputed after every new dividend or split, so the same date range can come back slightly different on a later download. That is why the range is pinned in `configs/sma_spy.yaml`, the loader reuses its Parquet cache instead of re-downloading (and replaces the file rather than merging when a range is extended), and every cache has a metadata file with its download time and SHA-256. [`reports/sma_spy_run.json`](reports/sma_spy_run.json) records the exact cache behind these results (downloaded 2026-09-27, SHA-256 `33c2c544…`). The cache itself is gitignored, so a fresh clone downloads its own copy; compare its hash with the manifest to know whether you're on identical data. Loaders implement the `DataLoader` protocol in `data/loader.py`. SPY, as an index ETF, also avoids the survivorship question a hand-picked stock would raise.
 
 ## Roadmap
-
-v1 is complete. The items below are not planned work; they are what the design leaves room for, and each one is an addition at an existing extension point rather than a rewrite.
 
 | Designed for | Extension point | Already in place |
 | --- | --- | --- |
@@ -149,17 +145,3 @@ pip install -e ".[dev]"
 python scripts/run_backtest.py configs/sma_spy.yaml   # downloads SPY once, writes reports/
 pytest                                                # offline suite
 ```
-
-- The date range is pinned to 2004-01-02 through 2024-12-31 in `configs/sma_spy.yaml`, so the numbers don't drift as new data arrives. The first run downloads SPY into `data/cache/`; later runs reuse it (`--refresh` forces a new download).
-- Outputs are deterministic: rerunning on the same cache rewrites byte-identical files, so a clean `git diff` means nothing changed. A fresh download may differ slightly; see the data note under [Scope and limitations](#scope-and-limitations).
-- Tests that call the live Yahoo API are deselected by default; run them with `pytest -m network`.
-- The notebook: `pip install -e ".[dev,notebook]"`, then `jupyter nbconvert --to notebook --execute --inplace notebooks/01_results.ipynb`.
-- CI runs ruff and the offline suite on Python 3.11 (pandas 2.2 and 3.0) and Python 3.14 (pandas 3.0).
-
-## Design notes
-
-A few decisions I made on purpose, and why:
-
-- **An event loop, not a vectorized engine.** Vectorized pandas (`signal.shift(1) * returns`) is shorter and faster, but its lookahead safety depends on remembering the `shift`. The bar-by-bar loop makes the guard structural (view truncation plus next-open fills), and it is the natural home for costs, multi-asset rebalancing, and model refits. Speed is irrelevant at a few thousand daily bars.
-- **Strategies return target weights, not signals or orders.** A `{symbol: weight}` dict keeps strategies about *what* to hold and the engine about *how* to get there. It extends to many assets and to model-driven sizing without changing the contract, and costs live in one place.
-- **No existing backtesting library.** Building the engine is the point of the project. I wanted to understand every step between a price and a fill, not configure someone else's. Owning the timing convention end to end is also what makes it testable at the level `tests/test_lookahead.py` tests it.
